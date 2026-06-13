@@ -20,57 +20,49 @@ public class ScheduleController {
 
     /**
      * 上传班表文件
+     * @param scheduleType 前端传入: MONTHLY(月班表) 或 WEEKLY(周班表)
      */
     @PostMapping("/upload")
-    public ResponseEntity<?> upload(@RequestParam("file") MultipartFile file,
-                                    Authentication auth) {
+    public ResponseEntity<?> upload(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "scheduleType", defaultValue = "MONTHLY") String scheduleType,
+            Authentication auth) {
         try {
-            ScheduleFile result = scheduleService.uploadAndParse(file, auth.getName());
+            if (!scheduleType.equals("MONTHLY") && !scheduleType.equals("WEEKLY")) {
+                return ResponseEntity.badRequest().body(Map.of("message", "scheduleType 必须为 MONTHLY 或 WEEKLY"));
+            }
+            ScheduleFile result = scheduleService.uploadAndParse(file, scheduleType, auth.getName());
             return ResponseEntity.ok(result);
         } catch (Exception e) {
             return ResponseEntity.status(500).body(Map.of("message", "解析失败: " + e.getMessage()));
         }
     }
 
-    /**
-     * 获取所有班表文件列表
-     */
     @GetMapping("/files")
     public ResponseEntity<List<ScheduleFile>> listFiles() {
         return ResponseEntity.ok(scheduleService.listFiles());
     }
 
-    /**
-     * 获取某班表的所有排班记录
-     */
     @GetMapping("/records/{fileId}")
     public ResponseEntity<List<ScheduleRecord>> getRecords(@PathVariable Long fileId) {
         return ResponseEntity.ok(scheduleService.getRecords(fileId));
     }
 
-    /**
-     * 获取某班表各天班次计数（含预警状态）
-     */
     @GetMapping("/counts/{fileId}")
     public ResponseEntity<List<DailyShiftCount>> getCounts(@PathVariable Long fileId) {
         return ResponseEntity.ok(scheduleService.getShiftCounts(fileId));
     }
 
-    /**
-     * 获取预警列表（count=0的班次）
-     */
     @GetMapping("/alerts/{fileId}")
     public ResponseEntity<List<DailyShiftCount>> getAlerts(@PathVariable Long fileId) {
         return ResponseEntity.ok(scheduleService.getAlerts(fileId));
     }
 
-    /**
-     * 编辑单元格班次
-     */
     @PutMapping("/record/{recordId}")
-    public ResponseEntity<?> updateCell(@PathVariable Long recordId,
-                                        @RequestBody Map<String, String> body,
-                                        Authentication auth) {
+    public ResponseEntity<?> updateCell(
+            @PathVariable Long recordId,
+            @RequestBody Map<String, String> body,
+            Authentication auth) {
         try {
             String newCode = body.get("shiftCode");
             ScheduleRecord updated = scheduleService.updateCell(recordId, newCode, auth.getName());
@@ -80,9 +72,6 @@ public class ScheduleController {
         }
     }
 
-    /**
-     * 删除班表
-     */
     @DeleteMapping("/file/{fileId}")
     public ResponseEntity<?> deleteFile(@PathVariable Long fileId, Authentication auth) {
         scheduleService.deleteFile(fileId, auth.getName());

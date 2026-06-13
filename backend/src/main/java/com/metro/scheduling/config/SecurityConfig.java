@@ -78,13 +78,25 @@ public class SecurityConfig {
             String header = req.getHeader("Authorization");
             if (header != null && header.startsWith("Bearer ")) {
                 String token = header.substring(7);
-                if (jwtUtil.validateToken(token)) {
-                    String username = jwtUtil.getUsernameFromToken(token);
-                    String role = jwtUtil.getRoleFromToken(token);
-                    var auth = new UsernamePasswordAuthenticationToken(
-                            username, null,
-                            List.of(new SimpleGrantedAuthority("ROLE_" + role)));
-                    SecurityContextHolder.getContext().setAuthentication(auth);
+                try {
+                    if (jwtUtil.validateToken(token)) {
+                        String username = jwtUtil.getUsernameFromToken(token);
+                        String role = jwtUtil.getRoleFromToken(token);
+                        var auth = new UsernamePasswordAuthenticationToken(
+                                username, null,
+                                List.of(new SimpleGrantedAuthority("ROLE_" + role)));
+                        SecurityContextHolder.getContext().setAuthentication(auth);
+                    } else {
+                        res.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                        res.setContentType("application/json;charset=UTF-8");
+                        res.getWriter().write("{\"message\":\"Token无效或已过期，请重新登录\"}");
+                        return;
+                    }
+                } catch (Exception e) {
+                    res.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    res.setContentType("application/json;charset=UTF-8");
+                    res.getWriter().write("{\"message\":\"Token解析失败: " + e.getMessage() + "\"}");
+                    return;
                 }
             }
             chain.doFilter(req, res);

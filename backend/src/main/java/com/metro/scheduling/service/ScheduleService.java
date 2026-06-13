@@ -15,6 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.*;
 
 @Service
@@ -31,53 +32,50 @@ public class ScheduleService {
     private String uploadDir;
 
     @Transactional
-    public ScheduleFile uploadAndParse(MultipartFile file, String uploadedBy) throws Exception {
-        // Save physical file
-        String dir = uploadDir;
-        new File(dir).mkdirs();
+    public ScheduleFile uploadAndParse(MultipartFile file, String scheduleType, String uploadedBy) throws Exception {
+        // 1. 保存物理文件
+        new File(uploadDir).mkdirs();
         String filename = System.currentTimeMillis() + "_" + file.getOriginalFilename();
-        Path savePath = Paths.get(dir, filename);
+        Path savePath = Paths.get(uploadDir, filename);
         Files.copy(file.getInputStream(), savePath);
 
-        // Parse
+        // 2. 解析 Excel（传入前端选择的类型）
         ExcelScheduleParser.ParseResult result;
         try (var is = new FileInputStream(savePath.toFile())) {
-            result = parser.parse(is, file.getOriginalFilename());
+            result = parser.parse(is, file.getOriginalFilename(), scheduleType);
         }
 
+        // 3. 保存文件信息
         ScheduleFile info = result.getFileInfo();
         info.setFileName(filename);
         info.setFilePath(savePath.toString());
         info.setUploadedBy(uploadedBy);
-        info.setUploadTime(java.time.LocalDateTime.now());
+        info.setUploadTime(LocalDateTime.now());
         fileRepo.save(info);
 
-        // Save records
+        // 4. 保存员工排班记录
         result.getRecords().forEach(r -> r.setFileId(info.getId()));
         recordRepo.saveAll(result.getRecords());
 
-        // Compute and save shift counts
-        recalcShiftCounts(info.getId(), result.getShiftCounts(), result.getDateCols());
+        // 5. 保存班次汇总（预警数据）
+        saveShiftCounts(info.getId(), result.getDates(), result.getShiftCountMap());
 
         logService.log(null, uploadedBy, "UPLOAD",
-                "上传班表: " + file.getOriginalFilename() + " (fileId=" + info.getId() + ")");
+                "上传班表: " + file.getOriginalFilename() + " (" + scheduleType + ", fileId=" + info.getId() + ")");
         return info;
     }
 
-    @Transactional
-    public void recalcShiftCounts(Long fileId,
-                                   Map<LocalDate, Map<String, Integer>> counts,
-                                   List<LocalDate> dates) {
+    private void saveShiftCounts(Long fileId, List<LocalDate> dates, Map<String, Integer> countMap) {
         countRepo.deleteByFileId(fileId);
         List<DailyShiftCount> toSave = new ArrayList<>();
         for (LocalDate date : dates) {
-            Map<String, Integer> dayMap = counts.getOrDefault(date, Map.of());
             for (String shift : ExcelScheduleParser.MONITORED_SHIFTS) {
+                String key = shift + "_" + date;
+                int cnt = countMap.getOrDefault(key, 0);
                 DailyShiftCount dsc = new DailyShiftCount();
                 dsc.setFileId(fileId);
                 dsc.setWorkDate(date);
                 dsc.setShiftCode(shift);
-                int cnt = dayMap.getOrDefault(shift, 0);
                 dsc.setCount(cnt);
                 dsc.setAlert(cnt < 1);
                 toSave.add(dsc);
@@ -86,9 +84,7 @@ public class ScheduleService {
         countRepo.saveAll(toSave);
     }
 
-    /**
-     * 编辑单元格后，重新计算该日期的班次汇总
-     */
+    /** 编辑单元格后重新计算该天汇总 */
     @Transactional
     public List<DailyShiftCount> recalcDayFromRecords(Long fileId, LocalDate date) {
         List<ScheduleRecord> recs = recordRepo.findByFileIdAndWorkDate(fileId, date);
@@ -98,12 +94,9 @@ public class ScheduleService {
 
         for (ScheduleRecord r : recs) {
             String code = normalizeShift(r.getShiftCode());
-            if (counts.containsKey(code)) {
-                counts.merge(code, 1, Integer::sum);
-            }
+            if (counts.containsKey(code)) counts.merge(code, 1, Integer::sum);
         }
 
-        // Delete old counts for this date/file
         List<DailyShiftCount> existing = countRepo.findByFileIdAndWorkDate(fileId, date);
         countRepo.deleteAll(existing);
 
@@ -121,16 +114,12 @@ public class ScheduleService {
         return countRepo.saveAll(updated);
     }
 
-    /**
-     * Normalize shift codes: "跟F1", "跟F2" → "F1", "F2" etc.
-     */
+    /** 跟F1 → F1，跟E2 → E2，A1-04 → A1 */
     public String normalizeShift(String code) {
         if (code == null) return "";
         code = code.trim();
-        // 跟X1 → X1
         if (code.startsWith("跟")) code = code.substring(1);
-        // Remove trailing qualifiers like -03, -04
-        code = code.replaceAll("-\\d+$", "");
+        code = code.replaceAll("[-_]\\d+$", "");
         return code;
     }
 
@@ -164,12 +153,11 @@ public class ScheduleService {
         rec.setEditedBy(username);
         recordRepo.save(rec);
 
-        // Recalculate counts for that day
         recalcDayFromRecords(rec.getFileId(), rec.getWorkDate());
 
         logService.log(null, username, "EDIT_CELL",
-                String.format("修改 [%s] %s %s: %s → %s",
-                        rec.getStaffName(), rec.getWorkDate(), rec.getShiftCode(), old, newShiftCode));
+                String.format("[%s] %s %s: %s → %s", rec.getStaffName(), rec.getWorkDate(),
+                        rec.getShiftCode(), old, newShiftCode));
         return rec;
     }
 

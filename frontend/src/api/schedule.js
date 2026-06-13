@@ -1,9 +1,10 @@
 import http from './http'
 
 export const scheduleApi = {
-  upload: (file, onProgress) => {
+  upload: (file, scheduleType, onProgress) => {
     const form = new FormData()
     form.append('file', file)
+    form.append('scheduleType', scheduleType)
     return http.post('/schedule/upload', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
       onUploadProgress: onProgress
